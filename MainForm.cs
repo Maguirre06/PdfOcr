@@ -1,5 +1,6 @@
+using System.Diagnostics;
 using System.Text;
-using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Web.WebView2.Core;
 using Windows.Data.Pdf;
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
@@ -9,47 +10,33 @@ using Windows.Storage.Streams;
 
 namespace PdfOcr;
 
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private readonly string language;
-    private readonly WebView2 web = new() { Dock = DockStyle.Fill };
-    private readonly TextBox text = new()
-    {
-        Dock = DockStyle.Fill,
-        Multiline = true,
-        ScrollBars = ScrollBars.Both,
-        WordWrap = false,
-        Font = new Font("Consolas", 10)
-    };
-    private readonly ToolStripButton openButton = new("Abrir PDF");
-    private readonly ToolStripButton ocrButton = new("OCR") { Enabled = false };
-    private readonly ToolStripLabel status = new(string.Empty);
+    private readonly string? initialPath;
     private string? pdfPath;
 
-    public MainForm(string language)
+    public MainForm()
+        : this("es", null)
+    {
+    }
+
+    public MainForm(string language, string? initialPath)
     {
         this.language = language;
-        Text = "PDF + OCR";
-        Width = 1300;
-        Height = 800;
+        this.initialPath = initialPath;
+        InitializeComponent();
+    }
 
-        var split = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            SplitterDistance = 800
-        };
-        split.Panel1.Controls.Add(web);
-        split.Panel2.Controls.Add(text);
+    private void ToggleOcrText(object? sender, EventArgs e)
+    {
+        SetOcrTextVisible(mainSplitContainer.Panel2Collapsed);
+    }
 
-        var toolbar = new ToolStrip();
-        toolbar.Items.AddRange([openButton, ocrButton, status]);
-
-        Controls.Add(split);
-        Controls.Add(toolbar);
-
-        openButton.Click += OpenPdf;
-        ocrButton.Click += RunOcr;
-        Load += InitializeWebView;
+    private void SetOcrTextVisible(bool visible)
+    {
+        mainSplitContainer.Panel2Collapsed = !visible;
+        toggleOcrTextButton.Text = visible ? "Ocultar texto OCR" : "Mostrar texto OCR";
     }
 
     private async void InitializeWebView(object? sender, EventArgs e)
@@ -57,6 +44,13 @@ internal sealed class MainForm : Form
         try
         {
             await web.EnsureCoreWebView2Async();
+            web.AllowExternalDrop = true;
+            web.CoreWebView2.NavigationStarting += WebNavigationStarting;
+            web.CoreWebView2.NewWindowRequested += WebNewWindowRequested;
+            if (initialPath is not null)
+            {
+                OpenPath(initialPath);
+            }
         }
         catch (Exception ex)
         {
@@ -77,10 +71,69 @@ internal sealed class MainForm : Form
             return;
         }
 
-        pdfPath = dialog.FileName;
-        web.Source = new Uri(pdfPath);
+        OpenPath(dialog.FileName);
+    }
+
+    private void OpenPath(string file)
+    {
+        if (!File.Exists(file) || !string.Equals(Path.GetExtension(file), ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(
+                "El archivo seleccionado no es un PDF válido.",
+                "Archivo no válido",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        SetOpenedPdf(file);
+        web.CoreWebView2.Navigate(new Uri(pdfPath!).AbsoluteUri);
+    }
+
+    private void SetOpenedPdf(string file)
+    {
+        pdfPath = Path.GetFullPath(file);
         ocrButton.Enabled = true;
         text.Clear();
+        SetOcrTextVisible(false);
+        status.Text = string.Empty;
+    }
+
+    private void WebNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri)
+            && uri.IsFile
+            && string.Equals(Path.GetExtension(uri.LocalPath), ".pdf", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(uri.LocalPath))
+        {
+            SetOpenedPdf(uri.LocalPath);
+        }
+    }
+
+    private void WebNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        if (!TryGetLocalPdf(e.Uri, out var file))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        BeginInvoke(() => OpenPath(file));
+    }
+
+    private static bool TryGetLocalPdf(string uriText, out string file)
+    {
+        if (Uri.TryCreate(uriText, UriKind.Absolute, out var uri)
+            && uri.IsFile
+            && string.Equals(Path.GetExtension(uri.LocalPath), ".pdf", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(uri.LocalPath))
+        {
+            file = uri.LocalPath;
+            return true;
+        }
+
+        file = string.Empty;
+        return false;
     }
 
     private async void RunOcr(object? sender, EventArgs e)
@@ -102,6 +155,8 @@ internal sealed class MainForm : Form
                     "Instalalo en Configuración > Hora e idioma > Idioma.");
                 return;
             }
+
+            SetOcrTextVisible(true);
 
             var file = await StorageFile.GetFileFromPathAsync(pdfPath);
             var pdf = await PdfDocument.LoadFromFileAsync(file);
@@ -147,5 +202,10 @@ internal sealed class MainForm : Form
         {
             ocrButton.Enabled = true;
         }
+    }
+
+    private void toolStripButton1_Click(object? sender, EventArgs e)
+    {       
+        Process.Start(new ProcessStartInfo("ms-settings:defaultapps") { UseShellExecute = true });
     }
 }
