@@ -1,4 +1,5 @@
 # PDF + OCR
+<img width="1916" height="1027" alt="image" src="https://github.com/user-attachments/assets/eb5284f5-807f-47ce-8573-31fcd3677034" />
 
 Visor de archivos PDF para Windows con reconocimiento de texto en espanol.
 
